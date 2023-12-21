@@ -1,0 +1,83 @@
+{
+    "EWF_file_header_v1": [13, {
+        "EVF_sig": [0, ["String", {"length": 8}]],
+        "Fields_start": [8, ["char"]],
+        "Segment_number": [9, ["unsigned short"]],
+        "Fields_end": [11, ["unsigned short"]],
+        "Descriptor": [13, ["EWF_section_descriptor_v1"]]
+    }],
+
+    "EWF_file_header_v2": [0, {
+        "EVF_sig": [0, ["String",  {"length": 8}]],
+        "Major_version": [9, ["char"]],
+        "Minor_version": [10, ["char"]],
+        "Compression_method": [11, ["Enumeration", {
+            "target": "unsigned short",
+            "choices": {
+                "0": "NONE",
+                "1": "DEFLATE",
+                "2": "BZIP2"
+            }
+        }]],
+        "Segment_number": [13, ["unsigned short"]],
+        "Set_identifier": [15, ["String", {"length":16}]]
+    }],
+
+    "EWF_section_descriptor_v1": [76, {
+        "Type": [0, ["String", {"length":16}]],
+        "Next": [16, ["Pointer", {
+            "target": "EWF_section_descriptor_v1"
+        }]],
+
+        "SectionSize": [24, ["unsigned long long"]],
+        "Checksum": [72, ["unsigned long"]]
+    }],
+
+    "EWF_volume": [94, {
+        "Media_type": [0, ["Enumeration", {
+            "choices":{
+                "0": "remobable_disk",
+                "1": "fixed_disk",
+                "2": "optical_disk",
+                "3": "LVF",
+                "4": "memory"
+            }
+        }]],
+
+        "Number_of_chunks": [4, ["unsigned long"]],
+        "Sectors_per_chunk": [8, ["unsigned long"]],
+        "Bytes_per_sector": [12, ["unsigned long"]],
+        "Number_of_sectors": [16, ["unsigned long long"]],
+        "Chs_cylinders": [24, ["unsigned long"]],
+        "Chs_heads": [28, ["unsigned long"]],
+        "Chs_sectors": [32, ["unsigned long"]],
+        "Media_flags": [36, ["Flags", {
+            "maskmap":{
+                "image": 1,
+                "physical": 2,
+                "Fastblock Tableau write blocker": 4,
+                "Tableau write blocker": 8
+            }}]],
+
+        "Compression_level": [52, ["Enumeration", {
+            "choices":{
+                "0": "no compression",
+                "1": "fast/good compression",
+                "2": "best compression"
+            }}]],
+
+        "Checksum": [90, ["long"]]
+    }],
+
+    "EWF_table_entry":[4, {
+        "Compressed": [0, ["BitField", {"start_bit":31, "end_bit":32}]],
+        "ChunkOffset": [0, ["BitField", {"start_bit":0, "end_bit":31}]]
+    }],
+
+    "EWF_table_header_v1": [0, {
+        "Number_of_entries": [0, ["unsigned long long"]],
+        "Base_offset": [8, ["unsigned long long"]],
+        "Checksum": [20, ["unsigned long"]],
+        "Entries": [24, ["EWF_table_entry"]]
+    }]
+}

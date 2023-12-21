@@ -1,0 +1,15 @@
+Module: parser
+Profile: EWFProfile
+Filename: ewf_profile.json
+GenerateDebugString: true
+Structs:
+  - "EWF_file_header_v1"
+  - "EWF_file_header_v2"
+  - "EWF_section_descriptor_v1"
+  - "EWF_volume"
+  - "EWF_table_header_v1"
+  - "EWF_table_entry"
+
+FieldBlackList:
+   _LARGE_INTEGER:
+   - u
