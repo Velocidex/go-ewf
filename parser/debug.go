@@ -61,8 +61,18 @@ func (self *EWFFile) WriteDebug(w io.Writer) {
 	w.Write([]byte(fmt.Sprintf(`
 ChunkSize: %v
 NumberOfChunks: %v
+TotalImageSize: %v
 
-`, self.ChunkSize, self.NumberOfChunks)))
+`, self.ChunkSize, self.NumberOfChunks, self.TotalImageSize)))
+
+	keys := self.Metadata.Keys()
+	if len(keys) > 0 {
+		w.Write([]byte("Metadata:\n"))
+		for _, k := range keys {
+			v, _ := self.Metadata.Get(k)
+			w.Write([]byte(fmt.Sprintf("   %v: %v\n", k, v)))
+		}
+	}
 
 	for i, descriptor := range self.Descriptors {
 		descriptor_type := strings.SplitN(descriptor.Type(), "\x00", 2)[0]
@@ -72,7 +82,16 @@ NumberOfChunks: %v
 	}
 
 	for i, chunk := range self.Tables {
-		w.Write([]byte(fmt.Sprintf("  chunk %v: %v (%v) from %v\n",
-			i, chunk.offset, chunk.size, getName(chunk.reader))))
+		compressed := ""
+		if chunk.compressed {
+			compressed = " (Compr)"
+		}
+
+		w.Write([]byte(fmt.Sprintf("  chunk %v: %v (%v) from %v%v\n",
+			i, chunk.offset, chunk.size, getName(chunk.reader), compressed)))
 	}
+}
+
+func DlvBreak() {
+
 }

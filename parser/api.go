@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Velocidex/ordereddict"
 	"www.velocidex.com/golang/go-ntfs/parser"
 )
 
@@ -24,6 +25,9 @@ type EWFFile struct {
 
 	ChunkSize      int64
 	NumberOfChunks int64
+	TotalImageSize int64
+
+	Metadata *ordereddict.Dict
 
 	Tables []chunk
 
@@ -80,6 +84,7 @@ func (self *EWFFile) reachChunk(chunk_id int) []byte {
 		page_buf = page_buf[:n]
 
 		self.lru.Add(chunk_id, page_buf)
+		DebugPrint("Decompressed chunk %v into %v bytes\n", chunk_id, n)
 		return page_buf
 	}
 
@@ -102,8 +107,13 @@ func (self *EWFFile) ReadAt(buf []byte, offset int64) (int, error) {
 			to_read = len(buf) - buf_idx
 		}
 
+		// Do not exceed the image size
+		if to_read > int(self.TotalImageSize-offset) {
+			to_read = int(self.TotalImageSize - offset)
+		}
+
 		// Are we done?
-		if to_read == 0 {
+		if to_read <= 0 {
 			return buf_idx, nil
 		}
 
@@ -119,10 +129,105 @@ func (self *EWFFile) ReadAt(buf []byte, offset int64) (int, error) {
 		offset += int64(to_read)
 		buf_idx += to_read
 		if DEBUG != nil && (self.Hits+self.Miss)%10000 == 0 {
-			fmt.Printf("PageCache hit %v miss %v (%v)\n", self.Hits, self.Miss,
+			DebugPrint("PageCache hit %v miss %v (%v)\n", self.Hits, self.Miss,
 				float64(self.Hits)/float64(self.Miss))
 		}
 	}
+}
+
+// These are mostly useless metadata fields we dont care about right
+// now. It is not an error if we can not handle any of it.
+func parseHeader(ewf *EWFFile, descriptor *EWF_section_descriptor_v1) error {
+	if len(ewf.Metadata.Keys()) > 0 {
+		return nil
+	}
+
+	section_size := descriptor.SectionSize()
+	if section_size > 1*1024*1024 {
+		return nil
+	}
+
+	c_buf := make([]byte, section_size)
+	n, err := descriptor.Reader.ReadAt(c_buf, descriptor.Offset+
+		int64(descriptor.Size()))
+	if err != nil {
+		return nil
+	}
+
+	// Try to decompress this data
+	c_reader := bytes.NewReader(c_buf[:n])
+	r, err := zlib.NewReader(c_reader)
+	if err != nil {
+		return nil
+	}
+
+	buff := &bytes.Buffer{}
+	_, err = io.CopyN(buff, r, 1*1024*1024)
+	if err != io.EOF && err != nil {
+		return nil
+	}
+
+	data_bytes := buff.Bytes()
+	if len(data_bytes) < 10 {
+		return nil
+	}
+
+	// Starts with a BOM
+	data := string(data_bytes)
+	if data_bytes[0] == 255 || data_bytes[1] == 254 {
+		data = UTF16ToUTF8(data)
+	}
+
+	lines := strings.Split(data, "\n")
+	if len(lines) < 5 || lines[1] != "main" {
+		return nil
+	}
+
+	keys := strings.Split(lines[2], "\t")
+	values := strings.Split(lines[3], "\t")
+
+	if len(keys) == len(values) {
+		for i, k := range keys {
+			v := values[i]
+
+			switch k {
+			case "a":
+				k = "Unique description"
+			case "c":
+				k = "Case Number"
+			case "n":
+				k = "Evidence number"
+			case "e":
+				k = "Examiner name"
+			case "t":
+				k = "Notes"
+			case "md":
+				k = "Model"
+			case "sn":
+				k = "Serial Number"
+			case "l":
+				k = "Device label"
+			case "av":
+				k = "Version"
+			case "ov":
+				k = "Platform"
+			case "m":
+				k = "Acquisition date and time"
+			case "u":
+				k = "Systemdate and time"
+			case "p":
+				k = "Password hash"
+			case "pid":
+				k = "Process identifier"
+			case "ext":
+				k = "Extents"
+			case "r":
+				k = "Compression"
+			}
+			ewf.Metadata.Set(k, v)
+		}
+	}
+	return nil
 }
 
 func parseVolume(ewf *EWFFile, descriptor *EWF_section_descriptor_v1) error {
@@ -130,6 +235,8 @@ func parseVolume(ewf *EWFFile, descriptor *EWF_section_descriptor_v1) error {
 		descriptor.Offset+int64(descriptor.Size()))
 	ewf.ChunkSize = int64(volume.Sectors_per_chunk() * volume.Bytes_per_sector())
 	ewf.NumberOfChunks = int64(volume.Number_of_chunks())
+	ewf.TotalImageSize = int64(volume.Bytes_per_sector()) *
+		int64(volume.Number_of_sectors())
 
 	// Prepare some space for chunks
 	ewf.Tables = make([]chunk, 0, ewf.NumberOfChunks)
@@ -144,22 +251,46 @@ func parseTable(ewf *EWFFile, descriptor *EWF_section_descriptor_v1) error {
 	base_offset := table.Base_offset()
 	start := table.Entries().Offset
 
-	for i := 0; i < int(table.Number_of_entries()); i++ {
-		e := table.Profile.EWF_table_entry(table.Reader, start+4*int64(i))
+	previous_chunk_offset := uint64(0)
+
+	// Read all the table offsets into one buffer for speed, otherwise
+	// we will be making lots of very small reads into the underlying
+	// reader one per table entry.
+	count := int(table.Number_of_entries())
+	buff := make([]byte, (count+1)*4)
+	_, err := table.Reader.ReadAt(buff, start)
+	if err != nil {
+		return err
+	}
+
+	mem_reader := bytes.NewReader(buff)
+
+	for i := 0; i < count; i++ {
+		e := table.Profile.EWF_table_entry(mem_reader, 4*int64(i))
 
 		current_offset := e.ChunkOffset() + base_offset
+		// Update the size of the last chunk based on the current
+		// offset.
+		if i > 1 {
+			previous_chunk := &ewf.Tables[len(ewf.Tables)-1]
+			previous_chunk_size := int64(current_offset - previous_chunk_offset)
+			previous_chunk.size = previous_chunk_size
+
+			// This can not happen!
+			if previous_chunk_size < 0 {
+				return fmt.Errorf("Negative chunk size for chunk %v",
+					len(ewf.Tables))
+			}
+		}
+
 		ewf.Tables = append(ewf.Tables, chunk{
-			reader:     e.Reader,
+			reader:     table.Reader,
 			compressed: e.Compressed() > 0,
 			offset:     current_offset,
 			size:       ewf.ChunkSize,
 		})
 
-		// Update the size of the last chunk based on the current
-		// offset.
-		if i > 0 {
-			ewf.Tables[i-1].size = int64(current_offset - ewf.Tables[i-1].offset)
-		}
+		previous_chunk_offset = current_offset
 	}
 
 	return nil
@@ -172,8 +303,7 @@ func parseDescriptor(ewf *EWFFile, descriptor *EWF_section_descriptor_v1) error 
 	descriptor_type := strings.SplitN(descriptor.Type(), "\x00", 2)[0]
 	switch descriptor_type {
 	case "header", "header2":
-		// These are useless metadata fields we dont care about right now.
-		return nil
+		return parseHeader(ewf, descriptor)
 
 	case "volume", "disk":
 		return parseVolume(ewf, descriptor)
@@ -202,7 +332,8 @@ func OpenEWFFile(options *EWFOptions, readers ...io.ReaderAt) (
 	}
 
 	ewf := &EWFFile{
-		lru: cache,
+		lru:      cache,
+		Metadata: ordereddict.NewDict(),
 	}
 
 	// Read all the files and sort them in order
@@ -238,6 +369,15 @@ func OpenEWFFile(options *EWFOptions, readers ...io.ReaderAt) (
 			}
 			descriptor = descriptor.Next()
 		}
+	}
+
+	// We can not proceed without a valid chunk size.
+	if ewf.ChunkSize == 0 {
+		return nil, fmt.Errorf("Unable to parse chunk size from image.")
+	}
+
+	if ewf.TotalImageSize == 0 {
+		ewf.TotalImageSize = ewf.ChunkSize * ewf.NumberOfChunks
 	}
 
 	return ewf, nil
