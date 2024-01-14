@@ -367,7 +367,14 @@ func OpenEWFFile(options *EWFOptions, readers ...io.ReaderAt) (
 			if err != nil {
 				return nil, err
 			}
-			descriptor = descriptor.Next()
+
+			// Descriptors must be in order
+			next_descriptor := descriptor.Next()
+			if next_descriptor.Offset == 0 ||
+				next_descriptor.Offset <= descriptor.Offset {
+				break
+			}
+			descriptor = next_descriptor
 		}
 	}
 
