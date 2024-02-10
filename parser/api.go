@@ -80,8 +80,13 @@ func (self *EWFFile) reachChunk(chunk_id int) []byte {
 			return page_buf
 		}
 
-		n, _ = r.Read(page_buf)
-		page_buf = page_buf[:n]
+		// Sometimes it seems this returns a short read so we need to
+		// resume it until we have an EOF or a full chunk.
+		for offset := 0; n > 0 && err == nil; offset += n {
+			n, err = r.Read(page_buf[offset:])
+			DebugPrint("Decompressing error %v could only read %v bytes from %v buffer\n",
+				err, n, len(page_buf))
+		}
 
 		self.lru.Add(chunk_id, page_buf)
 		DebugPrint("Decompressed chunk %v into %v bytes\n", chunk_id, n)
