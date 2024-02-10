@@ -12,8 +12,14 @@ var (
 	cat_command = app.Command("cat", "Dump file contents")
 
 	cat_command_files = cat_command.Arg(
-		"files", "The image file to inspect",
+		"files", "The image files to inspect (should include all .E* files)",
 	).Required().Strings()
+
+	cat_command_skip = cat_command.Flag(
+		"skip", "Bytes to skip").Int64()
+
+	cat_command_count = cat_command.Flag(
+		"count", "Total number of bytes to dump (0 mean to the end)").Int64()
 
 	cat_command_out_file = cat_command.Flag(
 		"output", "The file to write",
@@ -47,11 +53,19 @@ func doCat() {
 	kingpin.FatalIfError(err, "Unable to parse EWF File")
 
 	buff := make([]byte, 1000)
-	total_size := int(volume.ChunkSize * volume.NumberOfChunks)
+	total_size := int64(volume.ChunkSize * volume.NumberOfChunks)
 
-	for i := 0; i < total_size; i += len(buff) {
-		n, err := volume.ReadAt(buff, int64(i))
+	if *cat_command_count > 0 {
+		total_size = *cat_command_skip + *cat_command_count
+	}
+
+	for i := *cat_command_skip; i < total_size; i += int64(len(buff)) {
+		n, err := volume.ReadAt(buff, i)
 		kingpin.FatalIfError(err, "Unable to parse EWF File")
+		if i+int64(n) > total_size {
+			n = int(total_size - i)
+		}
+
 		output.Write(buff[:n])
 	}
 }
