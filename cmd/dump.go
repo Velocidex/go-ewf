@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/Velocidex/go-ewf/parser"
-	"github.com/alecthomas/kingpin"
+	"github.com/alecthomas/kingpin/v2"
 )
 
 var (

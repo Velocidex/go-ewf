@@ -41,7 +41,7 @@ type EWFFile struct {
 	Descriptors []*EWF_section_descriptor_v1
 }
 
-func (self *EWFFile) reachChunk(chunk_id int) []byte {
+func (self *EWFFile) readChunk(chunk_id int) []byte {
 	cached_page_buf, pres := self.lru.Get(chunk_id)
 	if !pres {
 		self.Miss += 1
@@ -69,12 +69,12 @@ func (self *EWFFile) reachChunk(chunk_id int) []byte {
 		// Chunk is compressed
 		compressed_chunk := make([]byte, chunk.size)
 		n, err := chunk.reader.ReadAt(compressed_chunk, int64(chunk.offset))
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return page_buf
 		}
 
 		// Now attempt to decompress the chunk.
-		c_reader := bytes.NewReader(compressed_chunk)
+		c_reader := bytes.NewReader(compressed_chunk[:n])
 		r, err := zlib.NewReader(c_reader)
 		if err != nil {
 			return page_buf
@@ -124,7 +124,7 @@ func (self *EWFFile) ReadAt(buf []byte, offset int64) (int, error) {
 
 		// Fetch the chunk from the LRU
 		chunkd_id := offset / self.ChunkSize
-		page_buf := self.reachChunk(int(chunkd_id))
+		page_buf := self.readChunk(int(chunkd_id))
 
 		// Copy the relevant data from the page.
 		page_offset := int(offset % self.ChunkSize)
